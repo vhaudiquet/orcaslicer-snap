@@ -42,7 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.params.outputs.version }}
-      track: ${{ steps.params.outputs.track }}
 
     steps:
       - name: Resolve version and track
@@ -61,12 +60,8 @@ jobs:
               | jq -r '.tag_name')
           fi
 
-          # Derive snap track from version: v2.3.2 → 2.x
-          TRACK=$(echo "$VERSION" | sed 's/^v\([0-9]*\)\..*/\1.x/')
-
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "track=${TRACK}" >> $GITHUB_OUTPUT
-          echo "Building version: ${VERSION}  track: ${TRACK}"
+          echo "Building version: ${VERSION}"
 
   build-snap:
     name: Build Snap (${{ matrix.architecture }})
@@ -186,7 +181,7 @@ jobs:
           if [ "${{ github.event.inputs.edge }}" = "true" ]; then
             CHANNEL="latest/edge"
           else
-            CHANNEL="${{ needs.setup.outputs.track }}/stable"
+            CHANNEL="latest/stable"
           fi
           echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
           echo "Publishing to channel: ${CHANNEL}"
