@@ -1,4 +1,4 @@
-name: orcaslicer
+name: vhaudiquet-orcaslicer
 base: core24
 adopt-info: orcaslicer
 summary: an open source Next-Gen Slicing Software for Precision 3D Prints
