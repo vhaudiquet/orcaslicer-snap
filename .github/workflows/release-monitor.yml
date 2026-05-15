@@ -73,6 +73,9 @@ jobs:
     needs: check-release
     if: needs.check-release.outputs.has-new-release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      issues: write
 
     steps:
       - name: Trigger build workflow
