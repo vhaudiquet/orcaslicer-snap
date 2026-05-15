@@ -1,0 +1,203 @@
+name: Build and Release Snap
+
+on:
+  # Triggered automatically by release-monitor.yml when a new upstream release
+  # is detected, or manually to build a specific version.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'OrcaSlicer version to build (e.g., v2.3.2), or "latest"'
+        required: false
+        default: 'latest'
+      edge:
+        description: 'Build from main branch (edge channel)'
+        required: false
+        default: false
+        type: boolean
+
+  # Build and smoke-test on every PR that touches the snap definition.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'snap/snapcraft.yaml'
+      - 'snap/local/**'
+      - '.github/workflows/snap-build.yml'
+
+  # Allow external triggers (e.g. from a repository_dispatch event).
+  repository_dispatch:
+    types: [orcaslicer-release]
+
+env:
+  SNAPCRAFT_BUILD_ENVIRONMENT: host
+
+jobs:
+  # Determine the version and snap track once; all downstream jobs read these
+  # outputs so the derivation logic lives in exactly one place.
+  setup:
+    name: Determine build parameters
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.params.outputs.version }}
+      track: ${{ steps.params.outputs.track }}
+
+    steps:
+      - name: Resolve version and track
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            VERSION="${{ github.event.client_payload.version }}"
+          elif [ "${{ github.event.inputs.edge }}" = "true" ]; then
+            VERSION="edge"
+          elif [ -n "${{ github.event.inputs.version }}" ] \
+            && [ "${{ github.event.inputs.version }}" != "latest" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            # PRs and 'latest' dispatches: build whatever is newest upstream
+            VERSION=$(curl -s https://api.github.com/repos/OrcaSlicer/OrcaSlicer/releases/latest \
+              | jq -r '.tag_name')
+          fi
+
+          # Derive snap track from version: v2.3.2 → 2.x
+          TRACK=$(echo "$VERSION" | sed 's/^v\([0-9]*\)\..*/\1.x/')
+
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "track=${TRACK}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}  track: ${TRACK}"
+
+  build-snap:
+    name: Build Snap (${{ matrix.architecture }})
+    needs: setup
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [amd64, arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pin source-tag in snapcraft.yaml
+        # For edge builds we leave the source as-is (main branch); for every
+        # other case we update the tag so Snapcraft fetches the right commit.
+        if: needs.setup.outputs.version != 'edge'
+        run: |
+          VERSION="${{ needs.setup.outputs.version }}"
+          TAG="${VERSION#v}"
+          sed -i "s/source-tag:.*/source-tag: v${TAG}/" snap/snapcraft.yaml
+
+      - name: Setup QEMU for cross-arch builds
+        if: matrix.architecture != 'amd64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build snap
+        uses: snapcore/action-build@v1
+        id: build
+        with:
+          snapcraft-args: "--target-arch=${{ matrix.architecture }}"
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: orcaslicer-${{ matrix.architecture }}
+          path: ${{ steps.build.outputs.snap }}
+          retention-days: 7
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.architecture }}
+          path: |
+            ~/.local/state/snapcraft/log/*.log
+            /tmp/snapcraft-*.log
+
+  test-snap:
+    name: Test Snap
+    needs: build-snap
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download amd64 snap artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: orcaslicer-amd64
+          path: ./snap-artifacts
+
+      - name: Install snap
+        run: sudo snap install --dangerous ./snap-artifacts/*.snap
+
+      - name: Verify binary is present
+        run: ls -la /snap/orcaslicer/current/usr/local/bin/orca-slicer
+
+      - name: Check snap interfaces
+        run: snap interfaces orcaslicer
+
+  publish-snap:
+    name: Publish to Snap Store
+    needs: [setup, build-snap, test-snap]
+    # Never publish from PRs; only publish from the main branch.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all snap artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./snap-artifacts
+          pattern: orcaslicer-*
+          merge-multiple: true
+
+      - name: Determine snap channel
+        id: channel
+        run: |
+          if [ "${{ github.event.inputs.edge }}" = "true" ]; then
+            CHANNEL="latest/edge"
+          else
+            CHANNEL="${{ needs.setup.outputs.track }}/stable"
+          fi
+          echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
+          echo "Publishing to channel: ${CHANNEL}"
+
+      - name: Publish to Snap Store
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ./snap-artifacts/*.snap
+          release: ${{ steps.channel.outputs.channel }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.setup.outputs.version }}
+          name: OrcaSlicer ${{ needs.setup.outputs.version }}
+          files: ./snap-artifacts/*.snap
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-failure:
+    name: Notify on build failure
+    needs: [setup, build-snap, test-snap, publish-snap]
+    if: failure() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create issue on failure
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Snap build failed for ${{ needs.setup.outputs.version }}`,
+              body: `The automated snap build failed.\n\nWorkflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\n\nPlease investigate and fix the issue.`,
+              labels: ['build-failure', 'automated']
+            })

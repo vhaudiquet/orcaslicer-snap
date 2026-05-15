@@ -1,0 +1,94 @@
+name: Monitor Upstream Releases
+
+on:
+  schedule:
+    # Check every 6 hours for new upstream releases
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-release:
+    name: Check for new OrcaSlicer release
+    runs-on: ubuntu-latest
+    outputs:
+      has-new-release: ${{ steps.check.outputs.has-new-release }}
+      version: ${{ steps.check.outputs.version }}
+      release-notes: ${{ steps.check.outputs.release-notes }}
+
+    steps:
+      - name: Get latest upstream release
+        id: upstream
+        run: |
+          RELEASE=$(curl -s https://api.github.com/repos/OrcaSlicer/OrcaSlicer/releases/latest)
+          VERSION=$(echo "$RELEASE" | jq -r '.tag_name')
+          NOTES=$(echo "$RELEASE" | jq -r '.body')
+
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "notes=${NOTES}" >> $GITHUB_OUTPUT
+          echo "Latest upstream version: ${VERSION}"
+
+      - name: Get current snap version
+        id: current
+        run: |
+          CURRENT=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases" \
+            | jq -r '.[0].tag_name // "v0.0.0"')
+          echo "version=${CURRENT}" >> $GITHUB_OUTPUT
+          echo "Current snap version: ${CURRENT}"
+
+      - name: Compare versions
+        id: check
+        run: |
+          UPSTREAM="${{ steps.upstream.outputs.version }}"
+          CURRENT="${{ steps.current.outputs.version }}"
+
+          # Strip the 'v' prefix for version comparison
+          UPSTREAM_VER="${UPSTREAM#v}"
+          CURRENT_VER="${CURRENT#v}"
+
+          if [ "$UPSTREAM_VER" != "$CURRENT_VER" ] && \
+             [ "$(printf '%s\n%s' "$CURRENT_VER" "$UPSTREAM_VER" | sort -V | tail -1)" = "$UPSTREAM_VER" ]; then
+            echo "has-new-release=true" >> $GITHUB_OUTPUT
+            echo "version=${UPSTREAM}" >> $GITHUB_OUTPUT
+            echo "New release detected: ${UPSTREAM}"
+          else
+            echo "has-new-release=false" >> $GITHUB_OUTPUT
+            echo "No new release needed"
+          fi
+
+          NOTES='${{ steps.upstream.outputs.notes }}'
+          echo "release-notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  trigger-build:
+    name: Trigger snap build
+    needs: check-release
+    if: needs.check-release.outputs.has-new-release == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger build workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'snap-build.yml',
+              ref: 'main',
+              inputs: {
+                version: '${{ needs.check-release.outputs.version }}'
+              }
+            })
+
+      - name: Create notification issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `New OrcaSlicer release detected: ${{ needs.check-release.outputs.version }}`,
+              body: `A new OrcaSlicer release has been detected.\n\n**Version:** ${{ needs.check-release.outputs.version }}\n\n**Release Notes:**\n\n${{ needs.check-release.outputs.release-notes }}\n\nThe snap build workflow has been triggered automatically.`,
+              labels: ['release', 'automated']
+            })
