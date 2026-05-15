@@ -67,12 +67,17 @@ jobs:
   build-snap:
     name: Build Snap (${{ matrix.architecture }})
     needs: setup
-    runs-on: ubuntu-24.04
+    # Each architecture builds on its own native runner
+    runs-on: ${{ matrix.runner }}
 
     strategy:
       fail-fast: false
       matrix:
-        architecture: [amd64, arm64]
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
@@ -87,17 +92,12 @@ jobs:
           TAG="${VERSION#v}"
           sed -i "s/source-tag:.*/source-tag: v${TAG}/" snap/snapcraft.yaml
 
-      - name: Setup QEMU for cross-arch builds
-        if: matrix.architecture != 'amd64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Build snap
         uses: snapcore/action-build@v1
         id: build
         with:
-          snapcraft-args: "--target-arch=${{ matrix.architecture }}"
+          # Explicit 'pack' subcommand: bare 'snapcraft' is deprecated
+          snapcraft-args: pack
 
       - name: Upload snap artifact
         uses: actions/upload-artifact@v4
