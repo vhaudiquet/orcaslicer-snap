@@ -24,7 +24,13 @@ jobs:
           NOTES=$(echo "$RELEASE" | jq -r '.body')
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "notes=${NOTES}" >> $GITHUB_OUTPUT
+          # NOTES is multiline markdown — use GITHUB_ENV heredoc so the next
+          # step receives it as an env var rather than via template substitution.
+          {
+            echo "UPSTREAM_NOTES<<NOTES_EOF"
+            echo "$NOTES"
+            echo "NOTES_EOF"
+          } >> $GITHUB_ENV
           echo "Latest upstream version: ${VERSION}"
 
       - name: Get current snap version
@@ -55,10 +61,12 @@ jobs:
             echo "No new release needed"
           fi
 
-          NOTES='${{ steps.upstream.outputs.notes }}'
-          echo "release-notes<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # UPSTREAM_NOTES is set as a multiline env var by the upstream step.
+          {
+            echo "release-notes<<NOTES_EOF"
+            echo "$UPSTREAM_NOTES"
+            echo "NOTES_EOF"
+          } >> $GITHUB_OUTPUT
 
   trigger-build:
     name: Trigger snap build
