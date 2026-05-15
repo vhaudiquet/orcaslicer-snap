@@ -159,8 +159,19 @@ parts:
       ninja -j${CRAFT_PARALLEL_BUILD_COUNT:-$(nproc)}
       cd ..
 
-      # Build OrcaSlicer
-      cmake . \
+      # Build OrcaSlicer using an out-of-source build directory (_build).
+      # This is required to avoid a self-referential symlink bug in
+      # OrcaSlicer's CMake: src/CMakeLists.txt runs
+      #   ln -sfn "${SLIC3R_RESOURCES_DIR}" "${BIN_RESOURCES_DIR}"
+      # as a POST_BUILD step to let the in-tree binary find resources.
+      # BIN_RESOURCES_DIR resolves to <binary_dir>/../resources. With an
+      # in-source build both paths are identical, so ln creates
+      #   resources/resources -> <build>/resources   (self-referential)
+      # which the FHS install(DIRECTORY) then includes in the snap, causing
+      # the Snap Store to reject it. With an out-of-source build the symlink
+      # lands in _build/resources (never installed) and the real resources
+      # directory stays clean.
+      cmake -S . -B _build \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DCMAKE_PREFIX_PATH="/usr/local;$CRAFT_PART_BUILD/usr/local;$CRAFT_STAGE;/usr" \
         -DSLIC3R_ASAN=OFF \
@@ -176,22 +187,8 @@ parts:
         -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld \
         -G Ninja
 
-      ninja -j${CRAFT_PARALLEL_BUILD_COUNT:-$(nproc)}
-      DESTDIR="${CRAFT_PART_INSTALL}" ninja install
-
-      # The FHS install creates usr/local/share/OrcaSlicer/resources as an
-      # absolute symlink pointing back into the build tree (e.g.
-      # /root/parts/orcaslicer/build/resources). The Snap Store rejects snaps
-      # that contain symlinks pointing outside $SNAP, so replace every such
-      # absolute symlink with a real copy of its target.
-      find "${CRAFT_PART_INSTALL}" -type l | while read -r link; do
-        target="$(readlink "$link")"
-        if [[ "$target" == /* ]]; then
-          echo "Replacing external symlink: $link -> $target"
-          rm "$link"
-          cp -a "$target" "$link"
-        fi
-      done
+      ninja -C _build -j${CRAFT_PARALLEL_BUILD_COUNT:-$(nproc)}
+      DESTDIR="${CRAFT_PART_INSTALL}" ninja -C _build install
 
       # Install SVG icon (upstream only installs PNGs)
       mkdir -p "${CRAFT_PART_INSTALL}/usr/local/share/icons/hicolor/scalable/apps"
