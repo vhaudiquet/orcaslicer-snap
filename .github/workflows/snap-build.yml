@@ -131,7 +131,7 @@ jobs:
         run: sudo snap install --dangerous ./snap-artifacts/*.snap
 
       - name: Verify binary is present
-        run: ls -la /snap/orcaslicer/current/usr/local/bin/orca-slicer
+        run: ls -la /snap/vhaudiquet-orcaslicer/current/usr/local/bin/orca-slicer
 
       - name: Check snap interfaces
         run: snap interfaces vhaudiquet-orcaslicer
