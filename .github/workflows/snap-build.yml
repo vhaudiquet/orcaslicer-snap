@@ -216,6 +216,8 @@ jobs:
     needs: [setup, build-snap, test-snap, publish-snap]
     if: failure() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
 
     steps:
       - name: Create issue on failure
