@@ -140,6 +140,8 @@ jobs:
   publish-snap:
     name: Publish to Snap Store
     needs: [setup, build-snap, test-snap]
+    permissions:
+      contents: write
     # Never publish from PRs; only publish from the main branch.
     # build-snap and test-snap are skipped (result: skipped) when reuse_run_id
     # is set, so we use always() + an explicit check instead of the default
