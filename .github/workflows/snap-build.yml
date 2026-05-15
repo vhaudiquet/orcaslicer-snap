@@ -165,13 +165,18 @@ jobs:
           echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
           echo "Publishing to channel: ${CHANNEL}"
 
+      - name: Install Snapcraft
+        run: sudo snap install --classic snapcraft
+
       - name: Publish to Snap Store
-        uses: snapcore/action-publish@v1.2.0
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
-        with:
-          snap: ./snap-artifacts/*.snap
-          release: ${{ steps.channel.outputs.channel }}
+        run: |
+          CHANNEL="${{ steps.channel.outputs.channel }}"
+          for snap_file in ./snap-artifacts/*.snap; do
+            echo "Uploading ${snap_file} to channel ${CHANNEL}..."
+            snapcraft upload "${snap_file}" --release "${CHANNEL}"
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
