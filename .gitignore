@@ -1,0 +1,27 @@
+# Snapcraft build artifacts
+*.snap
+parts/
+prime/
+stage/
+snap/.snapcraft/
+
+# Build logs
+*.log
+
+# Credentials
+credentials.txt
+*.pem
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local testing
+test-results/

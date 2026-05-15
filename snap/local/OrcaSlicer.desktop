@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=OrcaSlicer
+GenericName=3D Printing Slicer
+Comment=Next-Gen 3D Printing Slicer for Precision Prints
+Exec=orca-slicer %U
+Icon=/usr/local/share/icons/hicolor/scalable/apps/OrcaSlicer.svg
+Terminal=false
+Type=Application
+MimeType=model/stl;model/3mf;application/vnd.ms-3mfdocument;application/prs.wavefront-obj;application/x-amf;x-scheme-handler/orcaslicer;
+Categories=Graphics;3DGraphics;Engineering;
+Keywords=3D;Printing;Slicer;slice;printer;convert;gcode;stl;obj;amf;
+StartupNotify=false
+StartupWMClass=orca-slicer

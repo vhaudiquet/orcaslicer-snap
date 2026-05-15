@@ -1,0 +1,248 @@
+name: orcaslicer
+base: core24
+adopt-info: orcaslicer
+summary: an open source Next-Gen Slicing Software for Precision 3D Prints
+description: |
+ Optimize your prints with ultra-fast slicing, intelligent support generation, 
+ and seamless printer compatibility — engineered for perfection.
+license: AGPL-3.0-only
+
+platforms:
+  amd64:
+    build-on: [amd64]
+    build-for: [amd64]
+  arm64:
+    build-on: [arm64]
+    build-for: [arm64]
+
+compression: lzo
+grade: stable
+confinement: strict
+
+layout:
+  /usr/local/share/OrcaSlicer:
+    symlink: $SNAP/usr/local/share/OrcaSlicer
+
+apps:
+  orcaslicer:
+    environment:
+      PATH: $SNAP/usr/local/bin:$PATH
+      DISABLE_WAYLAND: 1
+      # Point OrcaSlicer directly at the system CA bundle so it doesn't show
+      # the "use system SSL certificate" popup on every launch.
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+    extensions:
+      - gnome
+    common-id: com.orcaslicer.OrcaSlicer
+    command-chain:
+      - usr/local/bin/orca-slicer-launcher
+    command: usr/local/bin/orca-slicer
+    desktop: usr/local/share/applications/OrcaSlicer.desktop
+    plugs:
+      - unity7
+      - home
+      - network
+      - network-bind
+      - removable-media
+      - hardware-observe
+      - mount-observe
+      - raw-usb
+      - serial-port
+      - udisks2
+      - cups
+
+parts:
+  launcher:
+    plugin: dump
+    source: snap/local
+    organize:
+      orca-slicer-launcher: usr/local/bin/orca-slicer-launcher
+      OrcaSlicer.desktop: usr/local/share/applications/OrcaSlicer.desktop
+    prime:
+      - usr/local/bin/orca-slicer-launcher
+      - usr/local/share/applications/OrcaSlicer.desktop
+
+  orcaslicer:
+    plugin: cmake
+    source: https://github.com/OrcaSlicer/OrcaSlicer.git
+    source-tag: v2.3.2
+    build-packages:
+      - build-essential
+      - cmake
+      - ninja-build
+      - gettext
+      - git
+      - m4
+      - autoconf
+      - automake
+      - libtool
+      - texinfo
+      - wget
+      - file
+      - libglvnd-dev
+      - libglew-dev
+      - libsecret-1-dev
+      - libudev-dev
+      - libdbus-1-dev
+      - libgtk-3-dev
+      - libcurl4-openssl-dev
+      - libssl-dev
+      - libgstreamerd-3-dev
+      - gstreamer1.0-gtk3
+      - libmspack-dev
+      - libspnav-dev
+      - libwebkit2gtk-4.1-dev
+      - extra-cmake-modules
+      - clang
+      - lld
+      - ccache
+
+    stage-packages:
+      - xdg-utils
+      - util-linux
+      - udisks2
+      - libgstreamer1.0-0
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-x
+      - libsecret-1-dev
+      - libwebkit2gtk-4.1-0
+      - libmspack0t64
+      - libproxy1v5
+      - glib-networking
+
+    build-environment:
+      - CMAKE_PREFIX_PATH: /usr/local;$CRAFT_PART_BUILD/usr/local;$CRAFT_STAGE;/usr
+      - PKG_CONFIG_PATH: $CRAFT_PART_BUILD/usr/local/lib/pkgconfig
+      - CC: clang
+      - CXX: clang++
+      - LDFLAGS: -fuse-ld=lld
+
+    override-pull: |
+      # Make sure that errors abort pipeline, treat unset variables as errors,
+      # print each command before execution and make all commands in pipes important
+      set -euxo pipefail
+
+      craftctl default
+
+      # Get version from git tag
+      _version="$(git describe --tags --abbrev=0 | sed 's/^v//')"
+      _commit="$(git rev-parse --short HEAD)"
+
+      # Set Snap package version
+      craftctl set version="${_version}"
+      craftctl set grade=stable
+
+      # Update build ID in version.inc
+      sed -i "s/+UNKNOWN/_${_commit}/" version.inc
+
+    override-build: |
+      # Make sure that errors abort pipeline, treat unset variables as errors,
+      # print each command before execution and make all commands in pipes important
+      set -euxo pipefail
+
+      unset LD_LIBRARY_PATH
+      cp -a "${CRAFT_PART_SRC}"/* "${CRAFT_PART_BUILD}"
+
+      # Build dependencies first (as configured upstream)
+      cd deps
+      cmake . \
+        -DDESTDIR=/ \
+        -DDEP_WX_GTK3=1 \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_CXX_FLAGS=-Wno-deprecated-declarations \
+        -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
+        -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld \
+        -G Ninja
+      ninja -j${CRAFT_PARALLEL_BUILD_COUNT:-$(nproc)}
+      cd ..
+
+      # Build OrcaSlicer
+      cmake . \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_PREFIX_PATH="/usr/local;$CRAFT_PART_BUILD/usr/local;$CRAFT_STAGE;/usr" \
+        -DSLIC3R_ASAN=OFF \
+        -DSLIC3R_STATIC=ON \
+        -DSLIC3R_FHS=ON \
+        -DSLIC3R_BUILD_TESTS=OFF \
+        -DSLIC3R_GTK=3 \
+        -DSLIC3R_PCH=OFF \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_CXX_FLAGS=-Wno-deprecated-declarations \
+        -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
+        -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld \
+        -G Ninja
+
+      ninja -j${CRAFT_PARALLEL_BUILD_COUNT:-$(nproc)}
+      DESTDIR="${CRAFT_PART_INSTALL}" ninja install
+
+      # Install SVG icon (upstream only installs PNGs)
+      mkdir -p "${CRAFT_PART_INSTALL}/usr/local/share/icons/hicolor/scalable/apps"
+      if [ -f "${CRAFT_PART_BUILD}/resources/images/OrcaSlicer.svg" ]; then
+        cp "${CRAFT_PART_BUILD}/resources/images/OrcaSlicer.svg" \
+           "${CRAFT_PART_INSTALL}/usr/local/share/icons/hicolor/scalable/apps/"
+      fi
+
+    override-prime: |
+      craftctl default
+
+      # Disable OrcaSlicer's built-in update checker. Snaps are updated through
+      # the store, so the in-app updater is redundant. It also crashes on certain
+      # system pango versions when rendering emoji in the release notes dialog
+      # (NULL pointer dereference in ensure_faces() / pango_fc_font_map_get_face).
+      python3 "${CRAFT_PROJECT_DIR}/snap/local/patch-updater-url.py" \
+        "${CRAFT_PRIME}/usr/local/bin/orca-slicer"
+
+    stage:
+      # Desktop files are owned by the 'launcher' part (snap/local/*.desktop);
+      # exclude them here to avoid a stage conflict with the cached build.
+      - -usr/local/share/applications/OrcaSlicer.desktop
+
+    prime:
+      - -usr/share/man
+      - -usr/share/doc-base
+      - -usr/share/lintian
+
+  # Remove Mesa libraries that stage-packages pull in transitively
+  # (libwebkit2gtk-4.1-0, gstreamer plugins, etc.) and that would shadow the
+  # ABI-compatible versions provided by the gpu-2404 content interface at
+  # runtime, causing a crash in libgallium during EGL initialisation.
+  # gpu-2404-cleanup is the canonical way to handle this; it removes every
+  # file in $CRAFT_PRIME that is already provided by the mesa-2404 content
+  # snap, keeping the list in sync with whatever that snap ships.
+  gpu-2404:
+    after:
+      - orcaslicer
+      - launcher
+    source: https://github.com/canonical/gpu-snap.git
+    plugin: dump
+    override-prime: |
+      craftctl default
+      ${CRAFT_PART_SRC}/bin/gpu-2404-cleanup mesa-2404
+
+  cleanup:
+    after:
+      - gpu-2404
+    plugin: nil
+    build-snaps:
+      - gnome-46-2404
+    override-prime: |
+      # Make sure that errors abort pipeline, treat unset variables as errors,
+      # print each command before execution and make all commands in pipes important
+      set -euxo pipefail
+
+      # Remove files already provided by the gnome extension
+      for snap in "gnome-46-2404"; do
+        cd "/snap/$snap/current" && find . -type f,l -exec rm -f "$CRAFT_PRIME/{}" \;
+      done
+
+      # Remove cruft
+      for CRUFT in bug lintian man; do
+        rm -rf $CRAFT_PRIME/usr/share/$CRUFT
+      done
+
+      # Remove documentation except copyright
+      find $CRAFT_PRIME/usr/share/doc/ -type f -not -name 'copyright' -delete 2>/dev/null || true
