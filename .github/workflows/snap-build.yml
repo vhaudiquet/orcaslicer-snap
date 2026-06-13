@@ -29,7 +29,7 @@ on:
 
   # Allow external triggers (e.g. from a repository_dispatch event).
   repository_dispatch:
-    types: [vhaudiquet-orcaslicer-release]
+    types: [orcaslicer-release]
 
 env:
   SNAPCRAFT_BUILD_ENVIRONMENT: host
@@ -102,7 +102,7 @@ jobs:
       - name: Upload snap artifact
         uses: actions/upload-artifact@v7
         with:
-          name: vhaudiquet-orcaslicer-${{ matrix.architecture }}
+          name: orcaslicer-${{ matrix.architecture }}
           path: ${{ steps.build.outputs.snap }}
           retention-days: 7
 
@@ -125,7 +125,7 @@ jobs:
       - name: Download amd64 snap artifact
         uses: actions/download-artifact@v8
         with:
-          name: vhaudiquet-orcaslicer-amd64
+          name: orcaslicer-amd64
           path: ./snap-artifacts
 
       - name: Install snap
@@ -135,7 +135,7 @@ jobs:
         run: ls -la /snap/vhaudiquet-orcaslicer/current/usr/local/bin/orca-slicer
 
       - name: Check snap interfaces
-        run: snap interfaces vhaudiquet-orcaslicer
+        run: snap interfaces orcaslicer
 
   publish-snap:
     name: Publish to Snap Store
@@ -164,7 +164,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: ./snap-artifacts
-          pattern: vhaudiquet-orcaslicer-*
+          pattern: orcaslicer-*
           merge-multiple: true
 
       - name: Download snap artifacts from prior run

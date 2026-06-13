@@ -53,7 +53,7 @@ echo "Building snap..."
 snapcraft pack --verbose
 
 # Find the built snap
-SNAP_FILE=$(ls -1 vhaudiquet-orcaslicer_*.snap 2>/dev/null | head -1)
+SNAP_FILE=$(ls -1 orcaslicer_*.snap 2>/dev/null | head -1)
 
 if [ -z "$SNAP_FILE" ]; then
     echo "Error: No snap file found after build"
@@ -78,14 +78,14 @@ fi
 # Install snap
 if [ "$INSTALL" = true ]; then
     echo "Installing snap..."
-    sudo snap remove vhaudiquet-orcaslicer --purge 2>/dev/null || true
+    sudo snap remove orcaslicer --purge 2>/dev/null || true
     sudo snap install --dangerous "$SNAP_FILE"
 
     echo "Testing installation..."
-    timeout 5 vhaudiquet-orcaslicer.orcaslicer --help || echo "(Timeout or display error - expected in headless environment)"
+    timeout 5 orcaslicer --help || echo "(Timeout or display error - expected in headless environment)"
 
     echo "Snap interfaces:"
-    snap connections vhaudiquet-orcaslicer
+    snap connections orcaslicer
 fi
 
 echo ""
