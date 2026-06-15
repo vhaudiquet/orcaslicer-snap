@@ -132,7 +132,7 @@ jobs:
         run: sudo snap install --dangerous ./snap-artifacts/*.snap
 
       - name: Verify binary is present
-        run: ls -la /snap/vhaudiquet-orcaslicer/current/usr/local/bin/orca-slicer
+        run: ls -la /snap/orcaslicer/current/usr/local/bin/orca-slicer
 
       - name: Check snap interfaces
         run: snap interfaces orcaslicer
@@ -172,7 +172,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: ./snap-artifacts
-          pattern: vhaudiquet-orcaslicer-*
+          pattern: orcaslicer-*
           merge-multiple: true
           run-id: ${{ github.event.inputs.reuse_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
