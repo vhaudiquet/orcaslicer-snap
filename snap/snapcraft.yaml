@@ -27,10 +27,13 @@ apps:
   orcaslicer:
     environment:
       PATH: $SNAP/usr/local/bin:$PATH
-      DISABLE_WAYLAND: 1
+      DISABLE_WAYLAND: '1'
       # Point OrcaSlicer directly at the system CA bundle so it doesn't show
       # the "use system SSL certificate" popup on every launch.
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      # Enable GTK portal usage for WebKitGTK (Orca Cloud) to work inside the sandbox.
+      # This allows WebKitGTK to use portals for network and other operations.
+      GTK_USE_PORTAL: '1'
     extensions:
       - gnome
     common-id: com.orcaslicer.OrcaSlicer
@@ -50,6 +53,7 @@ apps:
       - serial-port
       - udisks2
       - cups
+      - browser-support
 
 parts:
   launcher:
