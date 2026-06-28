@@ -46,6 +46,7 @@ apps:
       - home
       - network
       - network-bind
+      - network-status
       - removable-media
       - hardware-observe
       - mount-observe
