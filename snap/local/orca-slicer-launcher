@@ -5,4 +5,10 @@
 # index is out of range.
 unset DRI_PRIME
 
+# OrcaSlicer 2.5.0 links against the shared libavformat/libavcodec/libavutil/
+# libswscale/libswresample built by its deps part. The install rules put them
+# in $SNAP/usr/local/bin next to the executable, but the executable's RUNPATH
+# only lists $ORIGIN/../libpython/lib, so the loader never looks there.
+export LD_LIBRARY_PATH="$SNAP/usr/local/bin:$SNAP/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 exec "$@"

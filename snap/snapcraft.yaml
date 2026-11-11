@@ -22,6 +22,11 @@ confinement: strict
 layout:
   /usr/local/share/OrcaSlicer:
     symlink: $SNAP/usr/local/share/OrcaSlicer
+  # The executable's RUNPATH is $ORIGIN/../libpython/lib and the plugin runtime
+  # looks for the bundled interpreter at this absolute path, both baked in at
+  # build time from CMAKE_PREFIX_PATH=/usr/local.
+  /usr/local/libpython:
+    symlink: $SNAP/usr/local/libpython
 
 apps:
   orcaslicer:
@@ -101,6 +106,10 @@ parts:
       - clang
       - lld
       - ccache
+      # FFmpeg 7 (new dependency since 2.5.0) runs ./configure with x86 assembly
+      # enabled, and its configure dies when nasm/yasm is missing:
+      #   "nasm/yasm not found or too old. Use --disable-x86asm for a crippled build."
+      - nasm
 
     stage-packages:
       - xdg-utils
@@ -119,7 +128,12 @@ parts:
       - glib-networking
 
     build-environment:
-      - CMAKE_PREFIX_PATH: /usr/local;$CRAFT_PART_BUILD/usr/local;$CRAFT_STAGE;/usr
+      # Must be a single directory: OrcaSlicer 2.5.0 appends /lib and /libpython
+      # to ${CMAKE_PREFIX_PATH} and passes the result straight to file(COPY) and
+      # find_package(Python3), so a list value makes it copy /usr/local wholesale
+      # and fail on the other entries. /usr/local is where the deps part installs
+      # (it is configured with DESTDIR=/).
+      - CMAKE_PREFIX_PATH: /usr/local
       - PKG_CONFIG_PATH: $CRAFT_PART_BUILD/usr/local/lib/pkgconfig
       - CC: clang
       - CXX: clang++
@@ -180,7 +194,7 @@ parts:
       # directory stays clean.
       cmake -S . -B _build \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DCMAKE_PREFIX_PATH="/usr/local;$CRAFT_PART_BUILD/usr/local;$CRAFT_STAGE;/usr" \
+        -DCMAKE_PREFIX_PATH=/usr/local \
         -DSLIC3R_ASAN=OFF \
         -DSLIC3R_STATIC=ON \
         -DSLIC3R_FHS=ON \
@@ -196,6 +210,16 @@ parts:
 
       ninja -C _build -j${CRAFT_PARALLEL_BUILD_COUNT:-$(nproc)}
       DESTDIR="${CRAFT_PART_INSTALL}" ninja -C _build install
+
+      # OrcaSlicer 2.5.0 embeds the bundled CPython that runs its plugins. The
+      # deps part installs it to /usr/local/libpython, and the binary carries
+      # INSTALL_RPATH $ORIGIN/../libpython/lib to find it from /usr/local/bin.
+      # The project's FHS install rules ship no Python runtime, so copy it in.
+      if [ ! -d /usr/local/libpython ]; then
+        echo "ERROR: bundled Python missing at /usr/local/libpython (deps build did not install it)" >&2
+        exit 1
+      fi
+      cp -a /usr/local/libpython "${CRAFT_PART_INSTALL}/usr/local/"
 
       # Install SVG icon (upstream only installs PNGs)
       mkdir -p "${CRAFT_PART_INSTALL}/usr/local/share/icons/hicolor/scalable/apps"

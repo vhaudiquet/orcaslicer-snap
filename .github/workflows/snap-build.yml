@@ -134,6 +134,14 @@ jobs:
       - name: Verify binary is present
         run: ls -la /snap/orcaslicer/current/usr/local/bin/orca-slicer
 
+      - name: Verify bundled runtime libraries are present
+        # OrcaSlicer 2.5.0 embeds CPython and links the deps part's FFmpeg
+        # shared libraries; both live outside the project's own install rules.
+        run: |
+          ls -la /snap/orcaslicer/current/usr/local/libpython/bin/python3.12
+          ls -la /snap/orcaslicer/current/usr/local/libpython/lib/python3.12/encodings
+          ls -la /snap/orcaslicer/current/usr/local/bin/libavcodec.so.61
+
       - name: Check snap interfaces
         run: snap interfaces orcaslicer
 
