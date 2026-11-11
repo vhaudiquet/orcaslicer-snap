@@ -228,14 +228,75 @@ jobs:
       issues: write
 
     steps:
-      - name: Create issue on failure
+      - name: Report failure on the version's issue
         uses: actions/github-script@v9
         with:
           script: |
-            github.rest.issues.create({
+            // Every failed run of a version lands in the same issue. A run only
+            // adds a comment when a phase fails that the issue does not already
+            // record, so recurring failures of the same kind stay quiet.
+            const needs = ${{ toJSON(needs) }};
+            const version = needs.setup.outputs.version;
+            const title = `Snap build failed for ${version}`;
+            const runUrl = `${context.server_url}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const phases = Object.keys(needs)
+              .filter(name => name !== 'setup' && ['failure', 'cancelled'].includes(needs[name].result))
+              .sort();
+            const phaseList = phases.map(name => '`' + name + '`').join(', ') || 'unknown phase';
+            const signature = phases.join(',') || 'unknown';
+            const signatureMarker = `<!-- signature:${signature} -->`;
+
+            const search = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`,
+              per_page: 100,
+            });
+            // Older duplicates for the same version are matched too, so a run
+            // reports on an existing issue rather than adding another one.
+            const existing = search.data.items
+              .filter(issue => issue.title === title)
+              .sort((a, b) => a.number - b.number)[0];
+
+            if (!existing) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body: [
+                  `The automated snap build failed in ${phaseList}.`,
+                  '',
+                  `Workflow run: ${runUrl}`,
+                  '',
+                  'Please investigate and fix the issue.',
+                  signatureMarker,
+                ].join('\n'),
+                labels: ['build-failure', 'automated'],
+              });
+              core.info(`Created ${title}`);
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Snap build failed for ${{ needs.setup.outputs.version }}`,
-              body: `The automated snap build failed.\n\nWorkflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\n\nPlease investigate and fix the issue.`,
-              labels: ['build-failure', 'automated']
-            })
+              issue_number: existing.number,
+              per_page: 100,
+            });
+            const reported = [existing.body || '', ...comments.map(comment => comment.body || '')];
+            if (reported.some(body => body.includes(signatureMarker))) {
+              core.info(`#${existing.number} already records a '${signature}' failure, no comment added`);
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: existing.number,
+              body: [
+                `Build failed again, this time in ${phaseList}.`,
+                '',
+                `Workflow run: ${runUrl}`,
+                signatureMarker,
+              ].join('\n'),
+            });
+            core.info(`Commented on #${existing.number} for a '${signature}' failure`);
