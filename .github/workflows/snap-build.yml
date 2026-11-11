@@ -238,7 +238,9 @@ jobs:
             const needs = ${{ toJSON(needs) }};
             const version = needs.setup.outputs.version;
             const title = `Snap build failed for ${version}`;
-            const runUrl = `${context.server_url}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            // context.serverUrl is camelCase in @actions/github; the runner also
+            // exports it, which avoids depending on the context shape.
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             const phases = Object.keys(needs)
               .filter(name => name !== 'setup' && ['failure', 'cancelled'].includes(needs[name].result))
