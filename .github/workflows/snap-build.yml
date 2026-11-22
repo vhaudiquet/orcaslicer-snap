@@ -115,6 +115,68 @@ jobs:
             ~/.local/state/snapcraft/log/*.log
             /tmp/snapcraft-*.log
 
+      - name: Show build log on failure
+        # Snapcraft writes the real error into its own log file, and getting at
+        # it normally needs repo access: downloading the artifact is
+        # authenticated, and so is the job log. Console output and check-run
+        # annotations are public, so put the end of the log in both.
+        if: failure()
+        run: |
+          echo "runner: $(nproc) cpus, $(free -g | awk '/^Mem:/ {print $2}') GiB RAM"
+          shopt -s nullglob
+          # Escape a stream for the ::command:: format and join it into one line.
+          one_line() { cut -c1-1500 | awk '{gsub(/%/,"%25"); gsub(/\r/,"%0D"); printf "%s%%0A", $0}'; }
+          logs=(~/.local/state/snapcraft/log/*.log /tmp/snapcraft-*.log)
+          echo "log files: ${#logs[@]}"
+          # Whether the build was killed for memory or died on a compiler error
+          # decides what to do next, so record the evidence for both.
+          echo "=== runner context"
+          echo "--- memory"; free -g 2>&1 || true
+          echo "--- disk"; df -h / /tmp 2>&1 | tail -n 3 || true
+          echo "--- oom (empty means no kill)"
+          { sudo dmesg 2>/dev/null || journalctl -k 2>/dev/null || true; } | grep -iE 'out of memory|oom-kill|killed process' | tail -n 20 || true
+          for f in "${logs[@]}"; do
+            echo "::group::${f##*/} (last 400 lines)"
+            # A log that cannot be read must not turn this step red as well.
+            tail -n 400 "$f" 2>&1 || true
+            echo "::endgroup::"
+            [ -r "$f" ] || continue
+            # The tail is often just the last command that ran, so the lines
+            # naming a failure get an annotation of their own, and the tail one
+            # after it. Annotations have a size limit, hence the last 60/20.
+            msg=$(tail -n 60 "$f" | one_line)
+            [ -z "$msg" ] || printf '::error title=tail of %s::%s\n' "${f##*/}" "$msg"
+            # An unanchored /error/ matches -Werror=... and -Wno-error, which
+            # is most of what a compiler log contains, so match only the forms
+            # that name an actual failure.
+            msg=$(grep -E 'error:|Error [0-9]|fatal error|undefined reference|cannot find|No such file' "$f" | tail -n 20 | one_line)
+            [ -z "$msg" ] || printf '::error title=errors in %s::%s\n' "${f##*/}" "$msg"
+          done
+          # The job summary is rendered on the public run page, so it is the
+          # only channel that carries a real chunk of the log to anyone
+          # without repo access.
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### snapcraft log tail"
+              echo
+              echo '```'
+              free -g 2>&1 || true
+              df -h / /tmp 2>&1 | tail -n 3 || true
+              echo "oom kills: "$( { sudo dmesg 2>/dev/null || journalctl -k 2>/dev/null || true; } | grep -ciE 'out of memory|oom-kill|killed process' || true )
+              echo '```'
+              for f in "${logs[@]}"; do
+                [ -r "$f" ] || continue
+                echo "<details><summary>${f##*/}</summary>"
+                echo
+                echo '````'
+                tail -n 300 "$f" | cut -c1-400
+                echo '````'
+                echo "</details>"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
+
   test-snap:
     name: Test Snap
     needs: build-snap

@@ -110,6 +110,14 @@ parts:
       # enabled, and its configure dies when nasm/yasm is missing:
       #   "nasm/yasm not found or too old. Use --disable-x86asm for a crippled build."
       - nasm
+      # The bundled CPython is built with --enable-optimizations, and its PGO
+      # step needs llvm-profdata when CC is clang, which the build environment
+      # exports. Without it that dep dies at configure time with
+      #   "llvm-profdata is required for a --enable-optimizations build".
+      # The `llvm` metapackage is the one that ships /usr/bin/llvm-profdata,
+      # matching the clang 18 that `clang` installs; llvm-18 alone only
+      # provides the versioned name, which configure does not look for.
+      - llvm
 
     stage-packages:
       - xdg-utils
@@ -139,6 +147,19 @@ parts:
       - CXX: clang++
       - LDFLAGS: -fuse-ld=lld
 
+      # The `gnome` extension puts the gnome-46-2404 SDK on PATH, so pkg-config
+      # resolves zlib/libpng/... to the SDK and emits its includedir as a plain
+      # -I/snap/gnome-46-2404-sdk/current/usr/include. That directory also holds
+      # the SDK's glibc headers, and once they are picked up with -I the compiler
+      # no longer treats them as system headers: the host libstdc++ <cstdio> and
+      # the SDK <stdio.h> then disagree, and C++ builds of the deps die with
+      # "declaration of 'vsnprintf' has a different exception specifier" while
+      # compiling wxWidgets. Re-adding the same directories with -idirafter makes
+      # the compiler drop the plain -I copies and search them *after* the real
+      # system directories, so the host glibc headers keep winning.
+      - CFLAGS: -idirafter /snap/gnome-46-2404-sdk/current/usr/include/${CRAFT_ARCH_TRIPLET_BUILD_FOR} -idirafter /snap/gnome-46-2404-sdk/current/usr/include
+      - CXXFLAGS: -idirafter /snap/gnome-46-2404-sdk/current/usr/include/${CRAFT_ARCH_TRIPLET_BUILD_FOR} -idirafter /snap/gnome-46-2404-sdk/current/usr/include
+
     override-pull: |
       # Make sure that errors abort pipeline, treat unset variables as errors,
       # print each command before execution and make all commands in pipes important
@@ -165,8 +186,68 @@ parts:
       unset LD_LIBRARY_PATH
       cp -a "${CRAFT_PART_SRC}"/* "${CRAFT_PART_BUILD}"
 
+      # CPython's PGO step looks the profile tool up under its unversioned
+      # name. The llvm package provides it that way; if an image ever ships
+      # only the versioned binary, link it here rather than fail the whole
+      # build 20 minutes in with "llvm-profdata ... could not be found".
+      command -v llvm-profdata >/dev/null 2>&1 || ln -sfn /usr/lib/llvm-18/bin/llvm-profdata /usr/local/bin/llvm-profdata
+
+      # OrcaSlicer 2.5.0 and 2.5.1 pin wxWidgets to commit b44c39c of
+      # OrcaSlicer/Orca-deps-wxWidgets with GIT_SHALLOW ON, and a --depth 1
+      # clone only carries the current tips of the remote. Once the wx branch
+      # has moved past the pin, checking it out fails with "unable to read
+      # tree" unless some tag happens to still point at it, so the build rests
+      # on refs nobody promised to keep. 2.5.2 turns the option off for this
+      # reason; do the same so older tags stay buildable.
+      if [ -f deps/wxWidgets/wxWidgets.cmake ]; then
+        sed -i 's/GIT_SHALLOW ON/GIT_SHALLOW OFF/' deps/wxWidgets/wxWidgets.cmake
+      fi
+
+      # The GNOME SDK exposes libva, so OpenCV detects VA support and then fails
+      # to compile it: the SDK's va/va.h is not on the include path its
+      # pkg-config entry advertises. Upstream builds without VA in practice, so
+      # turn it off explicitly before the deps are configured.
+      if [ -f deps/OpenCV/OpenCV.cmake ] && \
+         ! grep -q -- '-DWITH_VA=OFF' deps/OpenCV/OpenCV.cmake; then
+        sed -i 's|^\(\s*\)-DWITH_OPENCL=OFF|&\n\1-DWITH_VA=OFF\n\1-DWITH_VA_INTEL=OFF|' \
+          deps/OpenCV/OpenCV.cmake
+      fi
+
+      # The bundled CPython is configured by upstream with
+      # --enable-optimizations, and with CC=clang that turns its build into a
+      # PGO pipeline: an instrumented build, a run of the test suite to collect
+      # profile data, then a second build against it. In this confined build
+      # that pipeline never converges - the job log shows two full instrumented
+      # builds and then a failure - and it needs llvm-profdata plus a working
+      # test run to produce profile data at all. The interpreter ships only to
+      # run OrcaSlicer's plugin and firmware-download helpers, where PGO buys a
+      # few percent at best, so build it plain and keep the dep deterministic.
+      if [ -f deps/python3/python3.cmake ]; then
+        # Range-limited to the Linux branch; the two macOS ones never run here.
+        sed -i -e '/^    set(_conf_cmd \.\/configure$/,/^    )$/ s|^\(\s*\)--enable-optimizations$|\1# --enable-optimizations  # dropped: see snapcraft.yaml|' \
+          deps/python3/python3.cmake
+        if awk '/^    set\(_conf_cmd \.\/configure$/,/^    \)$/' deps/python3/python3.cmake \
+           | grep -qE '^[[:space:]]*--enable-optimizations'; then
+          echo "error: could not drop --enable-optimizations from deps/python3" >&2
+          exit 1
+        fi
+      fi
+
       # Build dependencies first (as configured upstream)
       cd deps
+
+      # One dependency at a time, each one still using every core. Every dep is
+      # an ExternalProject whose inner build gets its own -j, so a parallel
+      # top-level build multiplies the two: with the ~20 dependencies OrcaSlicer
+      # 2.5.x pulls in (FFmpeg, CPython, Assimp, libdatachannel and SolveSpace on
+      # top of Boost/OCCT/OpenVDB/wxWidgets/...) a 4-core runner ends up running
+      # dozens of C++ compilers at once and the OOM killer takes the build down.
+      # Upstream's build_linux.sh documents the same thing ("it's recommended to
+      # use ninja -j1 for the top level"). CMAKE_BUILD_PARALLEL_LEVEL is read at
+      # configure time by orcaslicer_add_cmake_project (which then drops its own
+      # -j$(nproc)) and by FFmpeg's `make -j`, so export it before configuring.
+      export CMAKE_BUILD_PARALLEL_LEVEL="${CRAFT_PARALLEL_BUILD_COUNT:-$(nproc)}"
+
       cmake . \
         -DDESTDIR=/ \
         -DDEP_WX_GTK3=1 \
@@ -177,7 +258,14 @@ parts:
         -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
         -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld \
         -G Ninja
-      ninja -j${CRAFT_PARALLEL_BUILD_COUNT:-$(nproc)}
+      # The deps build prints megabytes of compiler command lines, and when a
+      # part fails snapcraft prints only a truncated copy of that output: the
+      # real error sits past the truncation point and is lost. Tee it to a file
+      # under the /tmp name the workflow's failure step already collects, so
+      # the tail of the real log reaches the public job log.
+      if ! ninja -j1 2>&1 | tee /tmp/snapcraft-deps-build.log; then
+        exit 1
+      fi
       cd ..
 
       # Build OrcaSlicer using an out-of-source build directory (_build).
@@ -192,6 +280,9 @@ parts:
       # the Snap Store to reject it. With an out-of-source build the symlink
       # lands in _build/resources (never installed) and the real resources
       # directory stays clean.
+      # CMAKE_CXX_FLAGS is set explicitly here, which replaces the value CMake
+      # would take from the build-environment CXXFLAGS, so the -idirafter
+      # work-around is appended by hand.
       cmake -S . -B _build \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DCMAKE_PREFIX_PATH=/usr/local \
@@ -203,7 +294,7 @@ parts:
         -DSLIC3R_PCH=OFF \
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
-        -DCMAKE_CXX_FLAGS=-Wno-deprecated-declarations \
+        "-DCMAKE_CXX_FLAGS=-Wno-deprecated-declarations ${CXXFLAGS:-}" \
         -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
         -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld \
         -G Ninja
